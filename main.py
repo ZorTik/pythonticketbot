@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 async def main():
     load_dotenv()
 
-    intents = discord.Intents.all()
+    intents = discord.Intents.default()
     intents.guilds = True
     intents.guild_messages = True
     intents.members = True

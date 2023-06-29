@@ -61,7 +61,8 @@ class OptionsPart(Part):
             letters = string.ascii_lowercase
             custom_id = "".join(random.choice(letters) for _ in range(10))
             button_maps[custom_id] = option
-            button = discord.ui.Button(style=discord.ButtonStyle.gray, label=option, )
+            button = discord.ui.Button(
+                style=discord.ButtonStyle.gray, label=option, custom_id=custom_id)
             options_view.add_item(button)
 
         sent_message = await ctx.channel.send(view=options_view, **self.message_args)
