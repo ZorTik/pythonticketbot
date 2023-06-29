@@ -164,7 +164,8 @@ class TicketBot(discord.Client):
         for guild_id in tickets_data:
             self.tickets[guild_id] = {}
             for ticket_channel_id in tickets_data[guild_id]:
-                self.tickets[guild_id][ticket_channel_id] = ticket_from_data(tickets_data[guild_id][ticket_channel_id])
+                ticket_instance = ticket_from_data(self, tickets_data[guild_id][ticket_channel_id])
+                self.tickets[guild_id][ticket_channel_id] = ticket_instance
 
         for guild in self.guilds:
             await self.reload_guild(guild)

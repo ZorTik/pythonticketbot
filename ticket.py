@@ -1,5 +1,7 @@
 from typing import Any
 
+import discord
+
 
 class Category:
     name: str
@@ -11,14 +13,16 @@ class Category:
 
 
 class Ticket:
+    client: discord.Client
     channel_id: int
 
-    def __init__(self, channel_id: int):
+    def __init__(self, client: discord.Client, channel_id: int):
+        self.client = client
         self.channel_id = channel_id
 
 
-def ticket_from_data(data) -> Ticket:
-    return Ticket(channel_id=data["channel_id"])
+def ticket_from_data(client: discord.Client, data) -> Ticket:
+    return Ticket(client=client, channel_id=data["channel_id"])
 
 
 def ticket_to_data(ticket: Ticket) -> Any:
