@@ -10,7 +10,7 @@ import source
 import ticket
 from event import EventEmitter, EventTypes
 from settings import GuildSettings, starter_settings
-from setup import input_latches, option_latches, ChannelSetup, Context, OptionsPart
+from setup import input_latches, option_latches, ChannelSetup, Context, OptionsPart, InputPart
 from source import DataSource
 from ticket import Ticket, Category, ticket_from_data, ticket_to_data
 
@@ -88,7 +88,7 @@ class TicketBot(discord.Client):
             channel = await channel.edit(name=channel_name, category=category_channel)
 
         channel_id = channel.id
-        ticket_instance = Ticket(channel_id=channel_id)
+        ticket_instance = Ticket(client=self, channel_id=channel_id)
 
         if self.tickets.get(guild.id) is None:
             self.tickets[guild.id] = {}
@@ -104,6 +104,10 @@ class TicketBot(discord.Client):
         future.set_result(ticket_instance)
         return future
 
+    def get_ticket(self, channel: discord.TextChannel):
+        guild_tickets = self.tickets.get(channel.guild.id) or {}
+        return guild_tickets.get(channel.id)
+
     async def reload_guild(self, guild: discord.Guild):
         if guild.id not in self.settings.keys():
             self.settings[guild.id] = starter_settings()
@@ -114,7 +118,10 @@ class TicketBot(discord.Client):
         guild_settings = self.settings[guild.id]
         if guild_settings.entry_channel is not None:
             entry_channel = await guild.fetch_channel(guild_settings.entry_channel)
-            entry_message_embed = Embed()
+            entry_message_embed = Embed(
+                title="Create Ticket",
+                description="Click on button below to create new ticket channel!"
+            )
             bot_self = self
 
             class EntryMessageView(View):
@@ -123,7 +130,10 @@ class TicketBot(discord.Client):
 
                 @discord.ui.button(label="Create Ticket")
                 async def handle_create_button_click(self, interaction: discord.Interaction, item):
-                    await bot_self.create_ticket(guild=guild, user=interaction.user)
+                    try:
+                        await bot_self.create_ticket(guild=guild, user=interaction.user)
+                    except InvalidGuildStateError:
+                        await interaction.response.send_message(content="This guild is not set up!", ephemeral=True)
 
             entry_message = await entry_channel.send(
                 embed=entry_message_embed,
@@ -140,8 +150,14 @@ class TicketBot(discord.Client):
             entry_message = await entry_channel.fetch_message(settings.entry_message)
             await entry_message.delete()
 
+    async def modify_settings(self, guild: Guild, modify_func):
+        await self.unload_guild(guild)
+        await modify_func(self.settings.get(guild.id))
+        self.save_settings()
+        await self.reload_guild(guild)
+
     def save_settings(self):
-        data = {}
+        data: Dict[int, Any] = {}
         for k in self.settings:
             data[k] = self.settings[k].to_data()
 
@@ -160,15 +176,17 @@ class TicketBot(discord.Client):
         tickets_data = self.data_source.load(source.DataTypes.tickets) or {}
         settings_data = self.data_source.load(source.DataTypes.settings) or {}
         for guild_id in settings_data:
-            self.settings[guild_id] = GuildSettings(settings_data[guild_id])
+            self.settings[int(guild_id)] = GuildSettings(settings_data[guild_id])
+            print(f"Loaded settings for guild {guild_id}")
         for guild_id in tickets_data:
-            self.tickets[guild_id] = {}
+            self.tickets[int(guild_id)] = {}
             for ticket_channel_id in tickets_data[guild_id]:
                 ticket_instance = ticket_from_data(self, tickets_data[guild_id][ticket_channel_id])
-                self.tickets[guild_id][ticket_channel_id] = ticket_instance
+                self.tickets[guild_id][int(ticket_channel_id)] = ticket_instance
 
         for guild in self.guilds:
             await self.reload_guild(guild)
+            print(f"Loaded guild {guild.name}!")
 
         await self.commands.sync()
 
@@ -207,17 +225,45 @@ class TicketBot(discord.Client):
             @discord.ui.button(label="Set Entry Channel", style=discord.ButtonStyle.gray)
             async def set_entry_channel_button(self, interaction: discord.Interaction, item):
                 entry_channel = interaction.channel
-                entry_message = await entry_channel.send()
 
-                bot_self.settings[interaction.guild_id].entry_channel = entry_channel.id
-                bot_self.settings[interaction.guild_id].entry_message = entry_message.id
-                bot_self.save_settings()
-                await bot_self.reload_guild(interaction.guild)
+                async def modify_settings_func(settings: GuildSettings):
+                    settings.entry_channel = entry_channel.id
+                    settings.entry_message = None  # Entry message will be created on reload
+
+                await bot_self.modify_settings(interaction.guild, modify_settings_func)
                 await bot_self.events.call(EventTypes.setup_entry_channel_set, {
                     "interaction": interaction
                 })
 
-        await response.send_message(embed=embed,ephemeral=True,view=CommandSetupView())
+            @discord.ui.button(label="Set Ticket Categories", style=discord.ButtonStyle.gray)
+            async def set_ticket_categories_button(self, interaction: discord.Interaction, item):
+
+                async def handle_done(status: int, ctx: Context):
+                    if status == 0:
+                        prepare_category_id = ctx.data["prepare_tickets_category_id"]
+                        tickets_category_id = ctx.data["tickets_category_id"]
+
+                        async def settings_modify_func(settings: GuildSettings):
+                            settings.prepare_tickets_category = prepare_category_id
+                            settings.tickets_category = tickets_category_id
+
+                        await bot_self.modify_settings(interaction.guild, settings_modify_func)
+                        await interaction.response.send_message(content="Categories saved!", ephemeral=True)
+                    else:
+                        await interaction.response.send_message(content="Something went wrong!", ephemeral=True)
+
+                setup = ChannelSetup(channel=interaction.channel, user=interaction.user, on_done=handle_done)
+                setup.add_part(InputPart(
+                    key="prepare_tickets_category_id",
+                    embed=Embed(title="Prepare Category ID", description="Write Prepare tickets category ID")
+                ))
+                setup.add_part(InputPart(
+                    key="tickets_category_id",
+                    embed=Embed(title="Tickets Category ID", description="Write tickets category ID")
+                ))
+                await setup.run()
+
+        await response.send_message(embed=embed, ephemeral=True, view=CommandSetupView())
 
     async def handle_command_ticket_admin(self, interaction: discord.Interaction):
         """ TODO """
@@ -227,3 +273,9 @@ class TicketBot(discord.Client):
     async def on_entry_channel_set(self, event):
         interaction = event["interaction"]
         await interaction.response.send_message(content="Channel set as entry channel!", ephemeral=True)
+
+    @events.listener(event_name=EventTypes.ticket_create)
+    async def on_ticket_create(self, event):
+        ticket_instance = event["ticket"]
+        channel_instance = event["channel"]
+        """ TODO: Create start message """

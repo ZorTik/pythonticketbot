@@ -30,11 +30,12 @@ class InputPart(Part):
         self.message_args = message_args
 
     async def run(self, ctx: Context, next_func, cancel_func):
-        await ctx.channel.send(**self.message_args)
+        sent_message = await ctx.channel.send(**self.message_args)
 
         async def move_next(message: discord.Message):
             del input_latches[ctx]
             ctx.data[self.key] = message.content
+            await sent_message.delete()
             await next_func()
 
         input_latches[ctx] = move_next
@@ -60,16 +61,16 @@ class OptionsPart(Part):
             button = discord.ui.Button(style=discord.ButtonStyle.gray, label=option, )
             options_view.add_item(button)
 
-        await ctx.channel.send(view=options_view, **self.message_args)
+        sent_message = await ctx.channel.send(view=options_view, **self.message_args)
 
         option_latch_keys = [*button_maps.keys()]
 
         async def handle_button_click(button_custom_id: str):
-            if button_custom_id in button_maps.keys():
-                del option_latches[option_latch_keys]
-                option_selected = button_maps[button_custom_id]
-                ctx.data[self.key] = option_selected
-                await next_func()
+            del option_latches[option_latch_keys]
+            option_selected = button_maps[button_custom_id]
+            ctx.data[self.key] = option_selected
+            await sent_message.delete()
+            await next_func()
 
         option_latches[option_latch_keys] = handle_button_click
 
