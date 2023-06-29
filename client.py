@@ -39,7 +39,11 @@ class TicketBot(discord.Client):
         Parameters
         guild: Guild instance
         user: Ticket author
-        category: Category instance, or None if setup should be invoked
+        category: Category instance (Optional)
+        title: Ticket title (Optional)
+        description: Ticket description (Optional)
+
+        ** All optional arguments present = Setup phase skipped
 
         Raises
         InvalidGuildStateError
