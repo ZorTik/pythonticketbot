@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 class EventTypes(Enum):
     setup_entry_channel_set = "setup_entry_channel_set"
+    ticket_create = "ticket_create"
 
 
 class EventEmitter:

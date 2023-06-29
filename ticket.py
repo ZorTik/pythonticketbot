@@ -3,9 +3,11 @@ from typing import Any
 
 class Category:
     name: str
+    lc_name: str
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, lc_name: str):
         self.name = name
+        self.lc_name = lc_name
 
 
 class Ticket:
@@ -27,5 +29,5 @@ def ticket_to_data(ticket: Ticket) -> Any:
 
 
 categories = [
-    Category(name="General Category")
+    Category(name="General Category", lc_name="general")
 ]
