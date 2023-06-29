@@ -1,9 +1,10 @@
+import json
 import random
 from typing import Any, Dict
 
 import discord
 from asyncio import Future
-from discord import Guild, Embed
+from discord import Guild, Embed, NotFound
 from discord.ui import View
 
 import source
@@ -49,9 +50,10 @@ class TicketBot(discord.Client):
             raise InvalidGuildStateError()
 
         if kwargs.get("category") is None:
-            prepare_category_channel = await guild.fetch_channel(guild_settings.prepare_tickets_category)
+            await guild.fetch_channels()
+            prepare_category_channel = guild.get_channel(guild_settings.prepare_tickets_category)
             ticket_channel = await prepare_category_channel.create_text_channel(
-                name=f"preparing-{user.global_name}-{random.randint(0, 999)}")
+                name=f"preparing-{user.name}-{random.randint(0, 999)}")
 
             setup_ticket_future: Future[Ticket] = Future()
 
@@ -71,12 +73,19 @@ class TicketBot(discord.Client):
 
             setup = ChannelSetup(channel=ticket_channel, user=user, on_done=handle_setup_complete)
             """ Load setup parts and ids in context """
-            setup.add_part(OptionsPart(key="category_id", options=list(map(lambda c: c.name, ticket.categories))))
+            setup.add_part(OptionsPart(
+                key="category_id",
+                options=list(map(lambda c: c.name, ticket.categories)),
+                embed=Embed(
+                    title="Ticket Category",
+                    description="Please select your ticket category"
+                )
+            ))
             await setup.run()
             return setup_ticket_future
 
         category: Category = kwargs["category"]
-        channel_name = f"{category.lc_name}-{user.global_name}-{random.randint(0, 999)}"
+        channel_name = f"{category.lc_name}-{user.name}-{random.randint(0, 999)}"
         channel_id = kwargs.get("channel_id") or -1
         channel: discord.TextChannel
         category_channel = await guild.fetch_channel(guild_settings.tickets_category)
@@ -131,7 +140,12 @@ class TicketBot(discord.Client):
                 @discord.ui.button(label="Create Ticket")
                 async def handle_create_button_click(self, interaction: discord.Interaction, item):
                     try:
-                        await bot_self.create_ticket(guild=guild, user=interaction.user)
+                        create_ticket_future = bot_self.create_ticket(guild=guild, user=interaction.user)
+                        await interaction.response.send_message(
+                            content="Ticket created, check tickets category!",
+                            ephemeral=True
+                        )
+                        await create_ticket_future
                     except InvalidGuildStateError:
                         await interaction.response.send_message(content="This guild is not set up!", ephemeral=True)
 
@@ -146,9 +160,12 @@ class TicketBot(discord.Client):
     async def unload_guild(self, guild: discord.Guild):
         settings = self.settings[guild.id]
         if settings.entry_channel and settings.entry_message is not None:
-            entry_channel = await guild.fetch_channel(settings.entry_channel)
-            entry_message = await entry_channel.fetch_message(settings.entry_message)
-            await entry_message.delete()
+            try:
+                entry_channel = await guild.fetch_channel(settings.entry_channel)
+                entry_message = await entry_channel.fetch_message(settings.entry_message)
+                await entry_message.delete()
+            except NotFound:
+                return
 
     async def modify_settings(self, guild: Guild, modify_func):
         await self.unload_guild(guild)
@@ -196,18 +213,20 @@ class TicketBot(discord.Client):
         print(f"Joined {guild.name}")
 
     async def on_message(self, message: discord.Message):
-        for latch_context in input_latches:
-            """ Search for active setup input latches for messages """
-            if latch_context.channel.id == message.channel.id and latch_context.user.id == message.author.id:
-                await input_latches[latch_context](message)
+        """ Search for active setup input latches for messages """
+        def input_latch_filter(ctx):
+            return ctx.channel.id == message.channel.id and ctx.user.id == message.author.id
+        input_latch_list = [latch_context for latch_context in input_latches if input_latch_filter(latch_context)]
+        if len(input_latch_list) > 0:
+            await input_latches[input_latch_list.pop()](message)
 
     async def on_interaction(self, interaction: discord.Interaction):
         if interaction.type == discord.InteractionType.component:
+            """ Search for button selection latches in setups """
             custom_id = interaction.data["custom_id"]
-            for option_latch_ids in option_latches:
-                """ Search for button selection latches in setups """
-                if custom_id in option_latch_ids:
-                    await option_latches[option_latch_ids](custom_id)
+            option_latch_keys = [key for key in option_latches if custom_id in json.loads(key)]
+            if len(option_latch_keys) > 0:
+                await option_latches[option_latch_keys.pop()](custom_id)
 
     async def handle_command_setup(self, interaction: discord.Interaction):
         response: discord.InteractionResponse = interaction.response
@@ -239,18 +258,23 @@ class TicketBot(discord.Client):
             async def set_ticket_categories_button(self, interaction: discord.Interaction, item):
 
                 async def handle_done(status: int, ctx: Context):
+                    guild = interaction.guild
                     if status == 0:
-                        prepare_category_id = ctx.data["prepare_tickets_category_id"]
-                        tickets_category_id = ctx.data["tickets_category_id"]
+                        prepare_category_id = int(ctx.data["prepare_tickets_category_id"])
+                        tickets_category_id = int(ctx.data["tickets_category_id"])
+
+                        if guild.get_channel(prepare_category_id) is None or guild.get_channel(tickets_category_id) is None:
+                            await interaction.user.send(content="Some provided channels are not on your guild!")
+                            return
 
                         async def settings_modify_func(settings: GuildSettings):
                             settings.prepare_tickets_category = prepare_category_id
                             settings.tickets_category = tickets_category_id
 
                         await bot_self.modify_settings(interaction.guild, settings_modify_func)
-                        await interaction.response.send_message(content="Categories saved!", ephemeral=True)
+                        await interaction.user.send(content="Categories saved!")
                     else:
-                        await interaction.response.send_message(content="Something went wrong!", ephemeral=True)
+                        await interaction.user.send(content="Something went wrong!")
 
                 setup = ChannelSetup(channel=interaction.channel, user=interaction.user, on_done=handle_done)
                 setup.add_part(InputPart(
@@ -262,6 +286,7 @@ class TicketBot(discord.Client):
                     embed=Embed(title="Tickets Category ID", description="Write tickets category ID")
                 ))
                 await setup.run()
+                await interaction.response.send_message(content="Follow categories setup", ephemeral=True)
 
         await response.send_message(embed=embed, ephemeral=True, view=CommandSetupView())
 

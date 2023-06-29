@@ -1,20 +1,25 @@
+import asyncio
 import os
+import sys
 
 import discord
 from discord import Interaction
 
 from client import TicketBot
+from setup import setups
 from source import JsonDataSource
 from dotenv import load_dotenv
 
 
-def main():
+async def main():
     load_dotenv()
 
-    intents = discord.Intents.default()
+    intents = discord.Intents.all()
     intents.guilds = True
     intents.guild_messages = True
     intents.members = True
+    intents.messages = True
+    intents.message_content = True
 
     client = TicketBot(intents=intents, data_source=JsonDataSource("data.json"))
     commands = discord.app_commands.CommandTree(client)
@@ -28,8 +33,18 @@ def main():
     async def setup_command(interaction: Interaction):
         await client.handle_command_ticket_admin(interaction)
 
-    client.run(os.environ.get("BOT_TOKEN"))
+    async def handle_exit():
+        print("Cancelling setups...")
+        [await setup.cancel() for setup in setups]
+        sys.exit(0)
+
+    try:
+        await client.start(os.environ.get("BOT_TOKEN"))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        await handle_exit()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

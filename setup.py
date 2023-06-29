@@ -1,5 +1,6 @@
 import string
 import random
+import json
 from typing import Dict, Any, List
 
 import discord
@@ -18,7 +19,8 @@ class Part:
 
 
 input_latches: Dict[Context, Any] = {}
-option_latches: Dict[List[str], Any] = {}
+option_latches: Dict[str, Any] = {}
+setups = []
 
 
 class InputPart(Part):
@@ -35,6 +37,7 @@ class InputPart(Part):
         async def move_next(message: discord.Message):
             del input_latches[ctx]
             ctx.data[self.key] = message.content
+            await message.delete()
             await sent_message.delete()
             await next_func()
 
@@ -66,13 +69,13 @@ class OptionsPart(Part):
         option_latch_keys = [*button_maps.keys()]
 
         async def handle_button_click(button_custom_id: str):
-            del option_latches[option_latch_keys]
+            del option_latches[json.dumps(option_latch_keys)]
             option_selected = button_maps[button_custom_id]
             ctx.data[self.key] = option_selected
             await sent_message.delete()
             await next_func()
 
-        option_latches[option_latch_keys] = handle_button_click
+        option_latches[json.dumps(option_latch_keys)] = handle_button_click
 
 
 class ChannelSetup:
@@ -111,12 +114,17 @@ class ChannelSetup:
                 return
 
             if self.index + 1 >= len(self.parts):
+                setups.remove(self)
+                self.finished = True
                 await self.on_done_func(0, self.context)
+                return
 
             self.index += 1
 
             part = self.parts[self.index]
             await part.run(self.context, next_func, self.cancel)
+
+        setups.append(self)
 
         await next_func()
 
@@ -124,5 +132,6 @@ class ChannelSetup:
         if self.finished:
             return
 
+        setups.remove(self)
         self.finished = True
         await self.on_done_func(1, self.context)
