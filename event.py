@@ -16,7 +16,7 @@ class EventEmitter:
         self.holder = holder
         self.listeners = {}
 
-    def listener(self, event_name: EventTypes):
+    def handler(self, event_name: EventTypes):
         def decorator_handler(func):
             if self.listeners.get(event_name) is None:
                 self.listeners[event_name] = []

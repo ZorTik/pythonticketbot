@@ -1,26 +1,29 @@
 import json
 import random
+from asyncio import Future
 from typing import Any, Dict
 
 import discord
-from asyncio import Future
 from discord import Guild, Embed, NotFound, SelectOption
 from discord.ui import View, Select
 
 import source
 import ticket
+from cache import GuildCache
+from errors import InvalidGuildStateError
 from event import EventEmitter, EventTypes
 from settings import GuildSettings, starter_settings
 from setup import input_latches, option_latches, ChannelSetup, Context, OptionsPart, InputPart
 from source import DataSource
 from ticket import Ticket, Category, ticket_from_data, ticket_to_data
-from errors import InvalidGuildStateError
+from user import user, TicketUser
 
 
 class TicketBot(discord.Client):
     data_source: DataSource
     tickets: Dict[int, Dict[int, Ticket]]
     settings: Dict[int, GuildSettings]
+    caches: Dict[int, GuildCache]
     commands: discord.app_commands.CommandTree
     events: EventEmitter = EventEmitter(super)
 
@@ -153,18 +156,34 @@ class TicketBot(discord.Client):
         guild_tickets = self.tickets.get(channel.guild.id) or {}
         return guild_tickets.get(channel.id)
 
+    def get_user(self, member: discord.Member) -> TicketUser:
+        cache = self.get_guild_caches(member.guild)
+        user_id = member.id
+        user_inst = cache.get_user(user_id)
+        if user_inst is None:
+            user_inst = user(self.data_source, member.guild.id, user_id)
+            cache.save_user(user_id, user_inst)
+        return user_inst
+
     def get_guild_settings(self, guild: Guild):
         return self.settings.get(guild.id)
 
+    def get_guild_caches(self, guild: Guild):
+        return self.caches.get(guild.id)
+
     def is_guild_prepared(self, guild: Guild) -> bool:
         guild_settings = self.settings.get(guild.id)
-        return guild_settings is not None and guild_settings.is_prepared()
+        guild_caches = self.caches.get(guild.id)
+        return guild_caches is not None and guild_settings is not None and guild_settings.is_prepared()
 
     async def reload_guild(self, guild: discord.Guild):
         if guild.id not in self.settings.keys():
             self.settings[guild.id] = starter_settings()
         if guild.id not in self.tickets.keys():
             self.tickets[guild.id] = {}
+
+        self.caches[guild.id] = GuildCache()
+
         await self.unload_guild(guild)
 
         guild_settings = self.settings[guild.id]
@@ -282,104 +301,114 @@ class TicketBot(discord.Client):
                 await option_latches[option_latch_keys.pop()](custom_id)
 
     async def handle_command_setup(self, interaction: discord.Interaction):
-        response: discord.InteractionResponse = interaction.response
-        embed = discord.Embed(
-            colour=discord.Colour.gold(),
-            title="Tickets Setup",
-            description="Your guild tickets settings"
+        def handle_restricted():
+            response: discord.InteractionResponse = interaction.response
+            embed = discord.Embed(
+                colour=discord.Colour.gold(),
+                title="Tickets Setup",
+                description="Your guild tickets settings"
+            )
+            bot_self = self
+
+            class CommandSetupView(discord.ui.View):
+                def __init__(self):
+                    super().__init__()
+
+                @discord.ui.button(label="Set Entry Channel", style=discord.ButtonStyle.gray)
+                async def set_entry_channel_button(self, interaction: discord.Interaction, item):
+                    entry_channel = interaction.channel
+
+                    async def modify_settings_func(settings: GuildSettings):
+                        settings.entry_channel = entry_channel.id
+                        settings.entry_message = None  # Entry message will be created on reload
+
+                    await bot_self.modify_settings(interaction.guild, modify_settings_func)
+                    await bot_self.events.call(EventTypes.setup_entry_channel_set, {
+                        "interaction": interaction
+                    })
+
+                @discord.ui.button(label="Set Ticket Categories", style=discord.ButtonStyle.gray)
+                async def set_ticket_categories_button(self, interaction: discord.Interaction, item):
+
+                    async def handle_done(status: int, ctx: Context):
+                        guild = interaction.guild
+                        if status == 0:
+                            prepare_category = guild.get_channel(int(ctx.data["prepare_tickets_category_id"]))
+                            tickets_category = guild.get_channel(int(ctx.data["tickets_category_id"]))
+                            closed_tickets_category = guild.get_channel(int(ctx.data["closed_tickets_category_id"]))
+
+                            if prepare_category is None or tickets_category is None or closed_tickets_category is None:
+                                await interaction.user.send(content="Some provided channels are not on your guild!")
+                                return
+
+                            async def settings_modify_func(settings: GuildSettings):
+                                settings.prepare_tickets_category = prepare_category.id
+                                settings.tickets_category = tickets_category.id
+                                settings.closed_tickets_category = closed_tickets_category.id
+
+                            await bot_self.modify_settings(interaction.guild, settings_modify_func)
+                            await interaction.user.send(content="Categories saved!")
+                        else:
+                            await interaction.user.send(content="Something went wrong!")
+
+                    setup = ChannelSetup(channel=interaction.channel, user=interaction.user, on_done=handle_done)
+                    setup.add_part(InputPart(
+                        key="prepare_tickets_category_id",
+                        embed=Embed(title="Prepare Category ID", description="Write preparing tickets category ID")
+                    ))
+                    setup.add_part(InputPart(
+                        key="tickets_category_id",
+                        embed=Embed(title="Tickets Category ID", description="Write tickets category ID")
+                    ))
+                    setup.add_part(InputPart(
+                        key="closed_tickets_category_id",
+                        embed=Embed(title="Closed Category ID", description="Write closed tickets category ID")
+                    ))
+                    await setup.run()
+                    await interaction.response.send_message(content="Follow categories setup", ephemeral=True)
+
+            await response.send_message(embed=embed, ephemeral=True, view=CommandSetupView())
+
+        await self.get_user(interaction.user).handle_restricted_interaction(
+            interaction, ["admin_setup"], handle_restricted
         )
-        bot_self = self
-
-        class CommandSetupView(discord.ui.View):
-            def __init__(self):
-                super().__init__()
-
-            @discord.ui.button(label="Set Entry Channel", style=discord.ButtonStyle.gray)
-            async def set_entry_channel_button(self, interaction: discord.Interaction, item):
-                entry_channel = interaction.channel
-
-                async def modify_settings_func(settings: GuildSettings):
-                    settings.entry_channel = entry_channel.id
-                    settings.entry_message = None  # Entry message will be created on reload
-
-                await bot_self.modify_settings(interaction.guild, modify_settings_func)
-                await bot_self.events.call(EventTypes.setup_entry_channel_set, {
-                    "interaction": interaction
-                })
-
-            @discord.ui.button(label="Set Ticket Categories", style=discord.ButtonStyle.gray)
-            async def set_ticket_categories_button(self, interaction: discord.Interaction, item):
-
-                async def handle_done(status: int, ctx: Context):
-                    guild = interaction.guild
-                    if status == 0:
-                        prepare_category = guild.get_channel(int(ctx.data["prepare_tickets_category_id"]))
-                        tickets_category = guild.get_channel(int(ctx.data["tickets_category_id"]))
-                        closed_tickets_category = guild.get_channel(int(ctx.data["closed_tickets_category_id"]))
-
-                        if prepare_category is None or tickets_category is None or closed_tickets_category is None:
-                            await interaction.user.send(content="Some provided channels are not on your guild!")
-                            return
-
-                        async def settings_modify_func(settings: GuildSettings):
-                            settings.prepare_tickets_category = prepare_category.id
-                            settings.tickets_category = tickets_category.id
-                            settings.closed_tickets_category = closed_tickets_category.id
-
-                        await bot_self.modify_settings(interaction.guild, settings_modify_func)
-                        await interaction.user.send(content="Categories saved!")
-                    else:
-                        await interaction.user.send(content="Something went wrong!")
-
-                setup = ChannelSetup(channel=interaction.channel, user=interaction.user, on_done=handle_done)
-                setup.add_part(InputPart(
-                    key="prepare_tickets_category_id",
-                    embed=Embed(title="Prepare Category ID", description="Write preparing tickets category ID")
-                ))
-                setup.add_part(InputPart(
-                    key="tickets_category_id",
-                    embed=Embed(title="Tickets Category ID", description="Write tickets category ID")
-                ))
-                setup.add_part(InputPart(
-                    key="closed_tickets_category_id",
-                    embed=Embed(title="Closed Category ID", description="Write closed tickets category ID")
-                ))
-                await setup.run()
-                await interaction.response.send_message(content="Follow categories setup", ephemeral=True)
-
-        await response.send_message(embed=embed, ephemeral=True, view=CommandSetupView())
 
     async def handle_command_ticket_admin(self, interaction: discord.Interaction):
-        ticket_instance = self.get_ticket(interaction.channel)
-        if ticket_instance is None:
-            await interaction.response.send_message(content="You are not in a ticket!", ephemeral=True)
-            return
+        def handle_restricted():
+            ticket_instance = self.get_ticket(interaction.channel)
+            if ticket_instance is None:
+                await interaction.response.send_message(content="You are not in a ticket!", ephemeral=True)
+                return
 
-        class TicketAdminView(View):
-            def __init__(self):
-                super().__init__()
+            class TicketAdminView(View):
+                def __init__(self):
+                    super().__init__()
 
-            @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.gray)
-            async def close_ticket_button(self, interaction: discord.Interaction, item):
-                await ticket_instance.close()
-                await interaction.response.send_message(content="Ticket has been closed!", ephemeral=True)
+                @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.gray)
+                async def close_ticket_button(self, interaction: discord.Interaction, item):
+                    await ticket_instance.close()
+                    await interaction.response.send_message(content="Ticket has been closed!", ephemeral=True)
 
-        await interaction.response.send_message(embed=Embed(
-            title="Ticket Admin",
-            description="Choose what to do with this ticket!"
-        ), view=TicketAdminView(), ephemeral=True)
+            await interaction.response.send_message(embed=Embed(
+                title="Ticket Admin",
+                description="Choose what to do with this ticket!"
+            ), view=TicketAdminView(), ephemeral=True)
 
-    @events.listener(event_name=EventTypes.setup_entry_channel_set)
+        await self.get_user(interaction.user).handle_restricted_interaction(
+            interaction, ["ticket_admin"], handle_restricted
+        )
+
+    @events.handler(event_name=EventTypes.setup_entry_channel_set)
     async def on_entry_channel_set(self, event):
         interaction = event["interaction"]
         await interaction.response.send_message(content="Channel set as entry channel!", ephemeral=True)
 
-    @events.listener(event_name=EventTypes.ticket_create)
+    @events.handler(event_name=EventTypes.ticket_create)
     async def on_ticket_create(self, event):
         ticket_instance: Ticket = event["ticket"]
         await ticket_instance.send_welcome_message()
 
-    @events.listener(event_name=EventTypes.ticket_close)
+    @events.handler(event_name=EventTypes.ticket_close)
     async def on_ticket_close(self, event):
         channel_instance: discord.TextChannel = event["channel"]
         await channel_instance.send(embed=Embed(

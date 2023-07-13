@@ -4,9 +4,14 @@ import os
 import json
 
 
+def user_type_func(gid: int, uid: int):
+    return f"user:{gid}:{uid}"
+
+
 class DataTypes:
     tickets = "tickets"
     settings = "settings"
+    user = user_type_func
 
 
 class DataSource:
