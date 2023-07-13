@@ -12,10 +12,18 @@ import random
 class Category:
     name: str
     lc_name: str  # ID
+    description: str
+    long_desc: str
 
-    def __init__(self, name: str, lc_name: str):
+    def __init__(self,
+                 name: str,
+                 lc_name: str,
+                 description: str,
+                 long_desc: str):
         self.name = name
         self.lc_name = lc_name
+        self.description = description
+        self.long_desc = long_desc
 
 
 class Ticket:
@@ -121,5 +129,8 @@ def ticket_to_data(ticket: Ticket) -> Any:
 
 
 categories = [
-    Category(name="General Category", lc_name="general")
+    Category(name="General Category",
+             lc_name="general",
+             description="General Questions category",
+             long_desc="Long Description about this category")
 ]

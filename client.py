@@ -4,8 +4,8 @@ from typing import Any, Dict
 
 import discord
 from asyncio import Future
-from discord import Guild, Embed, NotFound
-from discord.ui import View
+from discord import Guild, Embed, NotFound, SelectOption
+from discord.ui import View, Select
 
 import source
 import ticket
@@ -14,11 +14,7 @@ from settings import GuildSettings, starter_settings
 from setup import input_latches, option_latches, ChannelSetup, Context, OptionsPart, InputPart
 from source import DataSource
 from ticket import Ticket, Category, ticket_from_data, ticket_to_data
-
-
-class InvalidGuildStateError(Exception):
-    def __init__(self):
-        super().__init__()
+from errors import InvalidGuildStateError
 
 
 class TicketBot(discord.Client):
@@ -62,27 +58,27 @@ class TicketBot(discord.Client):
                 name=f"preparing-{user.name}-{random.randint(0, 999)}")
             ticket_channel_overwrites = ticket_channel.overwrites_for(user)
             await ticket_channel.set_permissions(guild.get_member(user.id), overwrite=ticket_channel_overwrites)
+            if kwargs.get("category") is not None:
+                category = list(filter(lambda c: c.lc_name == kwargs.get("category"), ticket.categories)).pop()
+                await ticket_channel.send(category.long_desc)
 
             setup_ticket_future: Future[Ticket] = Future()
 
             async def handle_setup_complete(status: int, ctx: Context):
                 if status == 0:
                     """ Load setup results from context """
-                    category_id = ctx.data["category_id"]
+                    category_id = ctx.data["category"]
                     title = ctx.data["title"]
                     description = ctx.data["description"]
-                    category_instance: Category = [c for c in ticket.categories if c.name == category_id].pop()
+                    category_instance: Category = [c for c in ticket.categories if c.lc_name == category_id].pop()
 
                     def when_complete(fut):
                         setup_ticket_future.set_result(fut.result())
 
                     (await self.create_ticket(
-                        guild=guild,
-                        user=user,
-                        category=category_instance,
-                        title=title,
-                        description=description,
-                        channel_id=ticket_channel.id
+                        guild=guild, user=user,
+                        category=category_instance, title=title,
+                        description=description, channel_id=ticket_channel.id
                     )).add_done_callback(when_complete)
                 else:
                     await ticket_channel.delete(reason="Ticket setup finished with non-zero value.")
@@ -90,22 +86,29 @@ class TicketBot(discord.Client):
 
             setup = ChannelSetup(channel=ticket_channel, user=user, on_done=handle_setup_complete)
             """ Load setup parts and ids in context """
-            setup.add_part(OptionsPart(
-                key="category_id",
-                options=list(map(lambda c: c.name, ticket.categories)),
-                embed=Embed(
-                    title="Ticket Category",
-                    description="Please select your ticket category"
+            ticket_setup_parts = {
+                "category": OptionsPart(
+                    key="category",
+                    options=list(map(lambda c: c.name, ticket.categories)),
+                    embed=Embed(
+                        title="Ticket Category",
+                        description="Please select your ticket category"
+                    )
+                ),
+                "title": InputPart(
+                    key="title",
+                    embed=Embed(title="Problem Title", description="Write down your problem title, please")
+                ),
+                "description": InputPart(
+                    key="description",
+                    embed=Embed(title="Problem Description", description="Now explain your problem in detail")
                 )
-            ))
-            setup.add_part(InputPart(
-                key="title",
-                embed=Embed(title="Problem Title", description="Write down your problem title, please")
-            ))
-            setup.add_part(InputPart(
-                key="description",
-                embed=Embed(title="Problem Description", description="Now explain your problem in detail")
-            ))
+            }
+            for arg in setup_args:
+                if kwargs.get(arg) is None:
+                    setup.add_part(ticket_setup_parts.get(arg))
+                else:
+                    setup.context.data[arg] = kwargs.get(arg)
             await setup.run()
             return setup_ticket_future
 
@@ -123,12 +126,9 @@ class TicketBot(discord.Client):
 
         channel_id = channel.id
         ticket_instance = Ticket(
-            client=self,
-            channel_id=channel_id,
-            author_id=user.id,
-            category=category,
-            title=kwargs.get("title"),
-            description=kwargs.get("description")
+            client=self, channel_id=channel_id,
+            author_id=user.id, category=category,
+            title=kwargs.get("title"), description=kwargs.get("description")
         )
 
         overwrites = ticket_instance.open_overwrites(overwrites=channel.overwrites_for(user))
@@ -175,15 +175,23 @@ class TicketBot(discord.Client):
                 description="Click on button below to create new ticket channel!"
             )
             bot_self = self
+            entry_message: discord.Message
 
             class EntryMessageView(View):
                 def __init__(self):
                     super().__init__()
 
-                @discord.ui.button(label="Create Ticket")
-                async def handle_create_button_click(self, interaction: discord.Interaction, item):
+                @discord.ui.select(cls=Select, placeholder="Select Category", options=list(map(
+                    lambda category: SelectOption(
+                        label=category.name, value=category.lc_name, description=category.description
+                    ),
+                    ticket.categories
+                )))
+                async def handle_select_category(self, interaction: discord.Interaction, select: Select):
+                    await entry_message.edit()
                     if bot_self.is_guild_prepared(interaction.guild):
-                        create_ticket_future = bot_self.create_ticket(guild=guild, user=interaction.user)
+                        create_ticket_future = bot_self.create_ticket(
+                            guild=guild, user=interaction.user, category=select.values[0])
                         await interaction.response.send_message(
                             content="Ticket created, check tickets category!",
                             ephemeral=True
