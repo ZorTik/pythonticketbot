@@ -1,3 +1,5 @@
+import logging
+
 import asyncio
 import os
 import sys
@@ -36,7 +38,6 @@ async def main():
     async def handle_exit():
         print("Cancelling setups...")
         [await setup.cancel() for setup in setups]
-        sys.exit(0)
 
     try:
         await client.start(os.environ.get("BOT_TOKEN"))
@@ -47,4 +48,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(), debug=True)

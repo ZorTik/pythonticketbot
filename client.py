@@ -30,6 +30,7 @@ class TicketBot(discord.Client):
     def __init__(self, *, intents: discord.Intents, data_source: DataSource, **options: Any):
         super().__init__(intents=intents, **options)
         self.data_source = data_source
+        self.caches = {}
 
     async def create_ticket(self, guild: Guild, user: discord.User, **kwargs) -> Future[Ticket]:
         """
@@ -301,7 +302,7 @@ class TicketBot(discord.Client):
                 await option_latches[option_latch_keys.pop()](custom_id)
 
     async def handle_command_setup(self, interaction: discord.Interaction):
-        def handle_restricted():
+        async def handle_restricted():
             response: discord.InteractionResponse = interaction.response
             embed = discord.Embed(
                 colour=discord.Colour.gold(),
@@ -374,7 +375,7 @@ class TicketBot(discord.Client):
         )
 
     async def handle_command_ticket_admin(self, interaction: discord.Interaction):
-        def handle_restricted():
+        async def handle_restricted():
             ticket_instance = self.get_ticket(interaction.channel)
             if ticket_instance is None:
                 await interaction.response.send_message(content="You are not in a ticket!", ephemeral=True)

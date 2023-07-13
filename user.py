@@ -61,9 +61,7 @@ class TicketUser:
                                             interaction: discord.Interaction,
                                             perms,
                                             handler):
-        is_admin = interaction.user.top_role.permissions.is_superset(
-            discord.Permissions.administrator
-        )
+        is_admin = interaction.user.guild_permissions.administrator
         if not is_admin and any(map(lambda p: p not in self.get_role().perms, perms)):
             await interaction.response.send_message(
                 embed=discord.Embed(
@@ -75,4 +73,4 @@ class TicketUser:
             )
             return
 
-        await handler(interaction)
+        await handler()
