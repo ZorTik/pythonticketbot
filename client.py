@@ -244,6 +244,10 @@ class TicketBot(discord.Client):
         self.save_settings()
         await self.reload_guild(guild)
 
+    async def sync_commands(self, guild):
+        self.commands.copy_global_to(guild=guild)
+        await self.commands.sync(guild=guild)
+
     def save_settings(self):
         data: Dict[int, Any] = {}
         for k in self.settings:
@@ -276,10 +280,8 @@ class TicketBot(discord.Client):
             await self.reload_guild(guild)
             print(f"Loaded guild {guild.name}!")
 
-        await self.commands.sync()
-
     async def on_guild_join(self, guild: discord.Guild):
-        await self.commands.sync(guild=guild)
+        await self.sync_commands(guild)
         await self.reload_guild(guild)
         print(f"Joined {guild.name}")
 
@@ -374,7 +376,7 @@ class TicketBot(discord.Client):
             interaction, ["admin_setup"], handle_restricted
         )
 
-    async def handle_command_ticket_admin(self, interaction: discord.Interaction):
+    async def handle_command_ticket_panel(self, interaction: discord.Interaction):
         async def handle_restricted():
             ticket_instance = self.get_ticket(interaction.channel)
             if ticket_instance is None:
@@ -396,8 +398,47 @@ class TicketBot(discord.Client):
             ), view=TicketAdminView(), ephemeral=True)
 
         await self.get_user(interaction.user).handle_restricted_interaction(
-            interaction, ["ticket_admin"], handle_restricted
+            interaction, ["ticket_panel"], handle_restricted
         )
+
+    async def handle_command_ticket_admin(self, interaction: discord.Interaction):
+        ticket_user = self.get_user(interaction.user)
+
+        async def handle_admin_panel():
+            embed = discord.Embed(
+                title="Tickets Admin",
+                description="Welcome to ticket administration! Please select an option below",
+            )
+            # TODO: View
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        await ticket_user.handle_restricted_interaction(interaction, ["admin_panel"], handle_admin_panel)
+
+    async def handle_command_user(self, interaction: discord.Interaction, d_user: discord.User):
+        ticket_user = self.get_user(interaction.user)
+
+        async def handle_user_panel():
+            embed = Embed(title=d_user.global_name, description="User Management Panel")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        await ticket_user.handle_restricted_interaction(interaction, ["user_panel"], handle_user_panel)
+
+    async def handle_command_user_group(self, interaction: discord.Interaction, d_user: discord.User, group: str):
+        ticket_user = self.get_user(interaction.user)
+
+        async def handle_user_panel_group():
+            d_member = interaction.guild.get_member(d_user.id)
+
+            if d_member is None:
+                await interaction.response.send_message("Provided user is not a member on this server!", ephemeral=True)
+                return
+            ticket_d_user = self.get_user(d_member)
+            try:
+                ticket_d_user.set_role(group)
+            except ValueError:
+                await interaction.response.send_message("Provided role does not exist!", ephemeral=True)
+
+        await ticket_user.handle_restricted_interaction(interaction, ["user_panel_groups"], handle_user_panel_group)
 
     @events.handler(event_name=EventTypes.setup_entry_channel_set)
     async def on_entry_channel_set(self, event):

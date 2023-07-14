@@ -3,12 +3,13 @@ import discord
 import source
 
 permissions = {
-    "admin_setup": {
-        "name": "Use Admin Setup",
-    },
-    "ticket_admin": {
-        "name": "Use Ticket Admin"
-    }
+    "admin_panel": {"name": "Use Admin Panel"},
+    "user_panel": {"name": "Use User Panel"},
+    "user_panel_groups": {"name": "Set user a group through panel"},
+    "admin_setup": {"name": "Use Admin Setup"},
+    "ticket_panel": {"name": "Use Ticket Admin"},
+    "sync_commands": {"name": "Synchronize Commands"},
+    "reload": {"name": "Reload bot on current guild"}
 }
 
 roles = {
@@ -53,6 +54,13 @@ class TicketUser:
             "role_id": self.role_id
         }
         d_source.save(source.DataTypes.user(self.guild_id, self.id), data)
+
+    def set_role(self, role_id):
+        role = roles.get(role_id)
+        if role is None:
+            raise ValueError("Provided role does not exist!")
+        self.role_id = role_id
+        return role
 
     def get_role(self):
         return roles.get(self.role_id)

@@ -26,26 +26,41 @@ class DataSource:
 
 class JsonDataSource(DataSource):
     path: str
+    data: Any
 
     def __init__(self, file_name: str):
         self.path = f"{os.getcwd()}/{file_name}"
         if not os.path.exists(self.path):
-            open(self.path, "x").close()
+            print("data.json does not exist, creating...")
+            self.recreate_file()
+        self.data = self.load_all()
 
     def load(self, data_type: str) -> Any:
-        return self.load_all().get(data_type)
+        return self.data.get(data_type)
 
     def save(self, data_type: str, data: Any):
         with open(self.path, "w") as file:
-            all_data = self.load_all()
+            all_data = self.data
             all_data[data_type] = data
+            self.data = all_data
             file.write(json.dumps(all_data))
 
-    def load_all(self):
-        with open(self.path, "r") as file:
-            lines = file.readlines()
-            dat = "".join(lines)
-            if len(lines) == 0:
-                return {}
+    def load_all(self, retries=1):
+        dat: str
+        with open(self.path, "r+") as file:
+            dat = "".join(file.readlines())
+        if len(dat) == 0:
+            if retries > 3:
+                print(f"Recreating data.json...")
+                self.recreate_file()
+                return self.load_all()
             else:
-                return json.loads(dat)
+                retries += 1
+                print(f"data.json is empty, retrying load... ({retries}nd try)")
+                return self.load_all(retries)
+        else:
+            return json.loads(dat)
+
+    def recreate_file(self):
+        with open(self.path, "w+") as file:
+            file.write("{}")
