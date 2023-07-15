@@ -6,6 +6,7 @@ class EventTypes(Enum):
     setup_entry_channel_set = "setup_entry_channel_set"
     ticket_create = "ticket_create"
     ticket_close = "ticket_close"
+    ticket_reopen = "ticket_reopen"
 
 
 class EventEmitter:

@@ -1,7 +1,7 @@
 import json
 import random
 from asyncio import Future
-from typing import Any, Dict
+from typing import Any, Dict, TYPE_CHECKING
 
 import discord
 from discord import Guild, Embed, NotFound, SelectOption
@@ -20,12 +20,15 @@ from user import user, TicketUser
 
 
 class TicketBot(discord.Client):
-    data_source: DataSource
-    tickets: Dict[int, Dict[int, Ticket]]
-    settings: Dict[int, GuildSettings]
-    caches: Dict[int, GuildCache]
-    commands: discord.app_commands.CommandTree
+    # Initialize emitter now to use down with the decorators
     events: EventEmitter = EventEmitter(super)
+
+    if TYPE_CHECKING:
+        data_source: DataSource
+        tickets: Dict[int, Dict[int, Ticket]]
+        settings: Dict[int, GuildSettings]
+        caches: Dict[int, GuildCache]
+        commands: discord.app_commands.CommandTree
 
     def __init__(self, *, intents: discord.Intents, data_source: DataSource, **options: Any):
         super().__init__(intents=intents, **options)
@@ -64,7 +67,7 @@ class TicketBot(discord.Client):
             await ticket_channel.set_permissions(guild.get_member(user.id), overwrite=ticket_channel_overwrites)
             if kwargs.get("category") is not None:
                 category = list(filter(lambda c: c.lc_name == kwargs.get("category"), ticket.categories)).pop()
-                await ticket_channel.send(category.long_desc)
+                await ticket_channel.send(embed=Embed(title=category.name, description=category.long_desc))
 
             setup_ticket_future: Future[Ticket] = Future()
 
@@ -144,6 +147,7 @@ class TicketBot(discord.Client):
         self.tickets[guild.id][channel_id] = ticket_instance
         self.save_tickets()
 
+        await ticket_instance.send_welcome_message()
         await self.events.call(EventTypes.ticket_create, {
             "ticket": ticket_instance,
             "channel": channel
@@ -306,11 +310,6 @@ class TicketBot(discord.Client):
     async def on_entry_channel_set(self, event):
         interaction = event["interaction"]
         await interaction.response.send_message(content="Channel set as entry channel!", ephemeral=True)
-
-    @events.handler(event_name=EventTypes.ticket_create)
-    async def on_ticket_create(self, event):
-        ticket_instance: Ticket = event["ticket"]
-        await ticket_instance.send_welcome_message()
 
     @events.handler(event_name=EventTypes.ticket_close)
     async def on_ticket_close(self, event):
